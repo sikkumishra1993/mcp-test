@@ -21,6 +21,7 @@ resource "aws_instance" "jenkins_ec2" {
     Environment = "Development"
     ManagedBy   = "Terraform"
     CreatedBy   = "Jenkins-Pipeline"
+    BuildNumber = "2"
   }
   
   root_block_device {
