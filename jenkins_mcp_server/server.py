@@ -1,4 +1,3 @@
-# filepath: c:\shashi\learning\mcp\testing\jenkins_mcp_server\server.py
 """
 Jenkins MCP Server - stdio mode
 """
