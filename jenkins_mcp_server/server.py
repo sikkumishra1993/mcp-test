@@ -1,62 +1,178 @@
-#!/usr/bin/env python3
+"""
+Jenkins MCP Server - stdio mode
+"""
 import os
-import httpx
+import sys
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
+import httpx
+from mcp.server.models import InitializationOptions
+from mcp.server import NotificationOptions, Server
+from mcp.types import Tool, TextContent
+import mcp.server.stdio
 
-class JenkinsMCPServer:
-    def __init__(self, jenkins_url: str, username: str = None, token: str = None):
-        self.jenkins_url = jenkins_url.rstrip("/")
-        self.auth = (username, token) if username and token else None
-        self.client = httpx.Client(verify=False, timeout=30.0)
-    
-    async def list_jobs(self) -> List[Dict[str, Any]]:
-        response = self.client.get(
-            f"{self.jenkins_url}/api/json",
-            auth=self.auth
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data.get("jobs", [])
-    
-    async def get_job_info(self, job_name: str) -> Dict[str, Any]:
-        response = self.client.get(
-            f"{self.jenkins_url}/job/{job_name}/api/json",
-            auth=self.auth
-        )
-        response.raise_for_status()
-        return response.json()
-    
-    async def trigger_build(self, job_name: str, parameters: Optional[Dict] = None) -> bool:
-        endpoint = f"/job/{job_name}/buildWithParameters" if parameters else f"/job/{job_name}/build"
-        response = self.client.post(
-            f"{self.jenkins_url}{endpoint}",
-            auth=self.auth,
-            data=parameters or {}
-        )
-        response.raise_for_status()
-        return True
-    
-    async def get_build_status(self, job_name: str, build_number: int) -> Dict[str, Any]:
-        response = self.client.get(
-            f"{self.jenkins_url}/job/{job_name}/{build_number}/api/json",
-            auth=self.auth
-        )
-        response.raise_for_status()
-        return response.json()
-    
-    async def get_console_output(self, job_name: str, build_number: int) -> str:
-        response = self.client.get(
-            f"{self.jenkins_url}/job/{job_name}/{build_number}/consoleText",
-            auth=self.auth
-        )
-        response.raise_for_status()
-        return response.text
 
-if __name__ == "__main__":
-    jenkins_url = os.getenv("JENKINS_URL", "http://localhost:8080")
-    username = os.getenv("JENKINS_USER")
-    token = os.getenv("JENKINS_TOKEN")
+class JenkinsServer:
+    """Jenkins MCP Server implementation."""
     
-    server = JenkinsMCPServer(jenkins_url, username, token)
-    print(f"Jenkins MCP Server initialized for {jenkins_url}")
+    def __init__(self, jenkins_url: str, username: str, token: str, verify_ssl: bool = True):
+        self.jenkins_url = jenkins_url.rstrip('/')
+        self.username = username
+        self.token = token
+        self.auth = (username, token)
+        self.verify_ssl = verify_ssl
+        self.server = Server("jenkins-mcp-server")
+        
+        self.server.list_tools()(self.list_tools_handler)
+        self.server.call_tool()(self.call_tool_handler)
+    
+    async def list_tools_handler(self) -> list[Tool]:
+        """List available Jenkins tools."""
+        return [
+            Tool(
+                name="list_jobs",
+                description="List all Jenkins jobs",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            ),
+            Tool(
+                name="create_job",
+                description="Create a new Jenkins job with XML configuration",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "job_name": {
+                            "type": "string",
+                            "description": "Name of the new Jenkins job"
+                        },
+                        "config_xml": {
+                            "type": "string",
+                            "description": "XML configuration for the job"
+                        }
+                    },
+                    "required": ["job_name", "config_xml"]
+                }
+            ),
+            Tool(
+                name="update_job",
+                description="Update/edit a Jenkins job's XML configuration",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "job_name": {
+                            "type": "string",
+                            "description": "Name of the Jenkins job to update"
+                        },
+                        "config_xml": {
+                            "type": "string",
+                            "description": "New XML configuration for the job"
+                        }
+                    },
+                    "required": ["job_name", "config_xml"]
+                }
+            ),
+            Tool(
+                name="delete_job",
+                description="Delete a Jenkins job",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "job_name": {
+                            "type": "string",
+                            "description": "Name of the Jenkins job to delete"
+                        }
+                    },
+                    "required": ["job_name"]
+                }
+            ),
+            Tool(
+                name="trigger_build",
+                description="Trigger a build for a Jenkins job with optional parameters",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "job_name": {
+                            "type": "string",
+                            "description": "Name of the Jenkins job"
+                        },
+                        "parameters": {
+                            "type": "object",
+                            "description": "Build parameters (optional)",
+                            "additionalProperties": True
+                        }
+                    },
+                    "required": ["job_name"]
+                }
+            ),
+            Tool(
+                name="get_build_status",
+                description="Get the status of a specific build",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "job_name": {
+                            "type": "string",
+                            "description": "Name of the Jenkins job"
+                        },
+                        "build_number": {
+                            "type": "integer",
+                            "description": "Build number"
+                        }
+                    },
+                    "required": ["job_name", "build_number"]
+                }
+            ),
+            Tool(
+                name="get_last_build",
+                description="Get information about the last build of a job",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "job_name": {
+                            "type": "string",
+                            "description": "Name of the Jenkins job"
+                        }
+                    },
+                    "required": ["job_name"]
+                }
+            ),
+            Tool(
+                name="get_build_console",
+                description="Get console output of a specific build",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "job_name": {
+                            "type": "string",
+                            "description": "Name of the Jenkins job"
+                        },
+                        "build_number": {
+                            "type": "integer",
+                            "description": "Build number"
+                        }
+                    },
+                    "required": ["job_name", "build_number"]
+                }
+            ),
+            Tool(
+                name="stop_build",
+                description="Stop a running build",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "job_name": {
+                            "type": "string",
+                            "description": "Name of the Jenkins job"
+                        },
+                        "build_number": {
+                            "type": "integer",
+                            "description": "Build number"
+                        }
+                    },
+                    "required": ["job_name", "build_number"]
+                }
+            )
+        ]
